@@ -1,13 +1,16 @@
 const express = require('express');
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
-const { mainDashboard } = require('./ui/dashboard');
+
+// --- FIXED: Looking for files in the same folder, not a 'ui' folder ---
+const { mainDashboard } = require('./dashboard'); 
 const { handleButtons } = require('./buttonHandler');
 const { handleModals } = require('./modalHandler');
 require('dotenv').config();
 
 const app = express();
 app.get('/', (req, res) => res.send('Champagne Terminal Online! 🥂'));
-app.listen(process.env.PORT || 3000, '0.0.0.0');
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => console.log(`Heartbeat listening on port ${port}`));
 
 const client = new Client({ 
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] 
@@ -19,14 +22,17 @@ client.on('ready', async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    } catch (error) { console.error(error); }
+    } catch (error) { 
+        console.error('Command Error:', error); 
+    }
 });
 
 client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
 
     if (i.isChatInputCommand() && i.commandName === 'start') {
-        return await i.reply(await mainDashboard(userId));
+        const ui = await mainDashboard(userId);
+        return await i.reply(ui);
     }
 
     if (i.isButton()) return await handleButtons(i, userId);
