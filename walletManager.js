@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
-const { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js'); // Added Solana web3 imports
+const { Keypair } = require('@solana/web3.js');
 const bs58 = require('bs58');
+const axios = require('axios');
 
 // --- 🛠️ CONNECTION POOL ---
 const db = new Pool({ 
@@ -11,7 +12,14 @@ const db = new Pool({
     connectionTimeoutMillis: 5000,
 });
 
-db.on('error', (err) => console.error('⚠️ Unexpected DB error:', err));
+// --- 🌐 BIRDEYE API INSTANCE ---
+const birdeye = axios.create({
+    baseURL: 'https://public-api.birdeye.so',
+    headers: { 
+        'X-API-KEY': process.env.BIRDEYE_API_KEY, 
+        'x-chain': 'solana' 
+    }
+});
 
 // --- 🚀 DATABASE SETUP ---
 async function setupDatabase() {
@@ -19,27 +27,41 @@ async function setupDatabase() {
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets (user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, secret_key TEXT NOT NULL)`);
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets_traders (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, trader_address TEXT NOT NULL, status TEXT DEFAULT 'active', trade_limit TEXT DEFAULT '0.1')`);
         await db.query(`ALTER TABLE champagne_wallets_traders ADD COLUMN IF NOT EXISTS trade_limit TEXT DEFAULT '0.1'`);
-        console.log('✅ [DB] Schema is verified and up to date.');
+        console.log('✅ [DB] Schema verified.');
     } catch (err) {
         console.error('❌ [DB] Setup Error:', err);
     }
 }
 setupDatabase();
 
-// --- 🌐 SOLANA BALANCE LOGIC ---
-async function getBalance(publicKeyString) {
+// --- 📊 BIRDEYE PORTFOLIO LOGIC (Replaces old getBalance) ---
+async function getWalletStats(address) {
     try {
-        // Using your Helius RPC
-        const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f");
-        const pubKey = new PublicKey(publicKeyString);
+        // From your screenshot: Wallet Portfolio / Token List
+        const res = await birdeye.get(`/v1/wallet/token_list?wallet=${address}`);
+        const data = res.data.data;
         
-        // AWAIT the network response to stop the 0.00 issue
-        const balance = await connection.getBalance(pubKey);
+        const solToken = data.items.find(i => i.symbol === 'SOL');
         
-        return (balance / LAMPORTS_PER_SOL).toFixed(4); 
+        return {
+            solBalance: solToken ? solToken.uiAmount.toFixed(3) : "0.000",
+            totalUsd: data.totalUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+            tokenCount: data.items.length
+        };
     } catch (e) {
-        console.error("Balance Fetch Error:", e);
-        return "0.0000";
+        console.error("Birdeye Sync Error:", e.message);
+        return { solBalance: "0.000", totalUsd: "$0.00", tokenCount: 0 };
+    }
+}
+
+// --- 🔥 DISCOVERY FEED (From your "Gainers/Losers" screenshot) ---
+async function getTopTradersFeed() {
+    try {
+        const res = await birdeye.get('/trader/gainers-losers?type=today&sort_by=pnl&limit=5');
+        return res.data.data.items; 
+    } catch (e) {
+        console.error("Top Traders Error:", e.message);
+        return [];
     }
 }
 
@@ -55,7 +77,6 @@ const getOrCreateWallet = async (userId) => {
                 secretKey: res.rows[0].secret_key 
             };
         } else {
-            // Generate NEW if none exists
             const kp = Keypair.generate();
             wallet = { 
                 publicKey: kp.publicKey.toBase58(), 
@@ -65,27 +86,19 @@ const getOrCreateWallet = async (userId) => {
                 [userId, wallet.publicKey, wallet.secretKey]);
         }
         
-        // ATTACH LIVE BALANCE before returning
-        wallet.balance = await getBalance(wallet.publicKey);
-        return wallet;
+        // ATTACH BIRDEYE STATS
+        const stats = await getWalletStats(wallet.publicKey);
+        return { ...wallet, ...stats };
 
     } catch (err) {
-        console.error('❌ [DB] Error in getOrCreateWallet:', err.message);
+        console.error('❌ [DB] Wallet Error:', err.message);
         throw err;
     }
 };
 
 // --- 👥 TRADER MANAGEMENT ---
 const addTrackedTrader = async (userId, address, limit) => {
-    try {
-        await db.query(
-            'INSERT INTO champagne_wallets_traders (user_id, trader_address, trade_limit) VALUES ($1, $2, $3)', 
-            [userId, address, limit]
-        );
-    } catch (err) {
-        console.error('❌ [DB] Error adding trader:', err.message);
-        throw err;
-    }
+    await db.query('INSERT INTO champagne_wallets_traders (user_id, trader_address, trade_limit) VALUES ($1, $2, $3)', [userId, address, limit]);
 };
 
 const getTrackedTraders = async (userId) => {
@@ -104,16 +117,12 @@ const toggleTraderStatus = async (id) => {
     await db.query('UPDATE champagne_wallets_traders SET status = $1 WHERE id = $2', [newStatus, id]);
 };
 
-const updateTraderLimit = async (id, newLimit) => {
-    await db.query('UPDATE champagne_wallets_traders SET trade_limit = $1 WHERE id = $2', [newLimit, id]);
-};
-
 module.exports = { 
     getOrCreateWallet, 
-    getBalance, // Exported so dashboard can use it for refreshes
+    getWalletStats,
+    getTopTradersFeed,
     addTrackedTrader, 
     getTrackedTraders, 
     deleteTrader, 
-    toggleTraderStatus, 
-    updateTraderLimit 
+    toggleTraderStatus 
 };
