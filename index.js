@@ -4,7 +4,7 @@ const {
     ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
     TextInputStyle, InteractionType, REST, Routes 
 } = require('discord.js');
-const { getOrCreateWallet } = require('./walletManager');
+const { getOrCreateWallet, addTrackedTrader, getTrackedTraders } = require('./walletManager');
 require('dotenv').config();
 
 // --- RENDER HEARTBEAT ---
@@ -87,39 +87,50 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.customId === 'menu_copytrade') {
-            // NOTE: In a future step, we will fetch the list of traders from your Postgres DB
-            // For now, this UI shows how the list will look.
+            const traders = await getTrackedTraders(userId);
+            
             const embed = new EmbedBuilder()
                 .setTitle('👥 Copy Trade Settings')
-                .setDescription('**Active Targets:**\nSelect a wallet below to Pause or Remove it.')
+                .setDescription(traders.length > 0 
+                    ? 'Select a wallet below to manage its status (Pause/Remove).' 
+                    : 'You aren’t following anyone yet. Add a target to begin.')
                 .setColor('#2ecc71');
 
-            const rows = [
-                // This row is for adding new ones
-                new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add New Target').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
-                )
-            ];
+            const rows = [];
             
-            // EXAMPLE: If you were following a wallet, it would appear as a button here:
-            // rows.push(new ActionRowBuilder().addComponents(
-            //     new ButtonBuilder().setCustomId('manage_wallet_1').setLabel('Wallet: 9jUQ... (ACTIVE)').setStyle(ButtonStyle.Primary)
-            // ));
+            // Generate a button for every trader in the DB
+            traders.forEach((t) => {
+                const shortAddr = `${t.trader_address.slice(0, 4)}...${t.trader_address.slice(-4)}`;
+                const statusEmoji = t.status === 'active' ? '🟢' : '⏸️';
+                
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`manage_trader_${t.id}`)
+                        .setLabel(`${statusEmoji} Wallet: ${shortAddr}`)
+                        .setStyle(ButtonStyle.Primary)
+                ));
+            });
+
+            // Footer buttons (Add and Back)
+            rows.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add New Target').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+            ));
 
             await i.update({ embeds: [embed], components: rows });
         }
 
-        // --- NEW: Manage Specific Trader Logic ---
-        if (i.customId.startsWith('manage_wallet_')) {
+        // --- MANAGE SPECIFIC TRADER LOGIC ---
+        if (i.customId.startsWith('manage_trader_')) {
+            const traderId = i.customId.split('_')[2];
             const embed = new EmbedBuilder()
                 .setTitle('⚙️ Manage Trader')
-                .setDescription(`**Target:** \`9jUQUXybS5VxSifH5pcjCeAgB8g9zVUqEZYDciiqLbQ\`\n**Status:** 🟢 Active`)
+                .setDescription(`Update the status for this target or remove them from your list.`)
                 .setColor('#f1c40f');
 
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('pause_trader').setLabel('⏸️ Pause').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('remove_trader').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`pause_${traderId}`).setLabel('⏸️ Pause/Resume').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`remove_${traderId}`).setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('menu_copytrade').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
             );
             await i.update({ embeds: [embed], components: [row] });
@@ -178,11 +189,12 @@ client.on('interactionCreate', async (i) => {
     if (i.type === InteractionType.ModalSubmit) {
         if (i.customId === 'whale_modal') {
             const address = i.fields.getTextInputValue('address');
-            const amount = i.fields.getTextInputValue('amount');
             
-            // In a pro setup, we save this address to your Postgres DB here.
+            // Save trader to Postgres
+            await addTrackedTrader(userId, address);
+            
             await i.reply({ 
-                content: `✅ **Success!** Added trader: \`${address}\`.\nThey will now appear in your Copy Trade list as a button.`, 
+                content: `✅ **Success!** Added trader: \`${address}\`. Re-open the Copy Trade menu to see your new button.`, 
                 ephemeral: true 
             });
         }
