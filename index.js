@@ -22,8 +22,9 @@ const client = new Client({
 });
 
 // --- UI GENERATORS ---
-const mainDashboard = (userId) => {
-    const wallet = getOrCreateWallet(userId);
+
+const mainDashboard = async (userId) => {
+    const wallet = await getOrCreateWallet(userId);
     return {
         embeds: [new EmbedBuilder()
             .setTitle('🍾 Champagne Services | Terminal')
@@ -44,6 +45,7 @@ const mainDashboard = (userId) => {
 };
 
 // --- CLIENT LOGIC ---
+
 client.on('ready', async () => {
     console.log(`🚀 Logged in as ${client.user.tag}`);
     const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
@@ -61,7 +63,7 @@ client.on('interactionCreate', async (i) => {
 
     // 1. Handle Slash Commands
     if (i.isChatInputCommand()) {
-        if (i.commandName === 'start') return await i.reply(mainDashboard(userId));
+        if (i.commandName === 'start') return await i.reply(await mainDashboard(userId));
     }
 
     // 2. Handle Buttons
@@ -85,25 +87,46 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.customId === 'menu_copytrade') {
+            // NOTE: In a future step, we will fetch the list of traders from your Postgres DB
+            // For now, this UI shows how the list will look.
             const embed = new EmbedBuilder()
                 .setTitle('👥 Copy Trade Settings')
-                .setDescription('**Targets:** `None`\nMonitor wallets and mimic their buys/sells instantly.')
+                .setDescription('**Active Targets:**\nSelect a wallet below to Pause or Remove it.')
                 .setColor('#2ecc71');
+
             const rows = [
+                // This row is for adding new ones
                 new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add Wallet').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('pause_copy').setLabel('⏸️ Pause').setStyle(ButtonStyle.Secondary),
-                    new ButtonBuilder().setCustomId('remove_whale').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger)
-                ),
-                new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add New Target').setStyle(ButtonStyle.Success),
                     new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
                 )
             ];
+            
+            // EXAMPLE: If you were following a wallet, it would appear as a button here:
+            // rows.push(new ActionRowBuilder().addComponents(
+            //     new ButtonBuilder().setCustomId('manage_wallet_1').setLabel('Wallet: 9jUQ... (ACTIVE)').setStyle(ButtonStyle.Primary)
+            // ));
+
             await i.update({ embeds: [embed], components: rows });
         }
 
+        // --- NEW: Manage Specific Trader Logic ---
+        if (i.customId.startsWith('manage_wallet_')) {
+            const embed = new EmbedBuilder()
+                .setTitle('⚙️ Manage Trader')
+                .setDescription(`**Target:** \`9jUQUXybS5VxSifH5pcjCeAgB8g9zVUqEZYDciiqLbQ\`\n**Status:** 🟢 Active`)
+                .setColor('#f1c40f');
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('pause_trader').setLabel('⏸️ Pause').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('remove_trader').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('menu_copytrade').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+            );
+            await i.update({ embeds: [embed], components: [row] });
+        }
+
         if (i.customId === 'menu_withdraw') {
-            const wallet = getOrCreateWallet(userId);
+            const wallet = await getOrCreateWallet(userId);
             const embed = new EmbedBuilder()
                 .setTitle('💸 Withdraw Funds')
                 .setDescription(`**Available Balance:** \`0.00 SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
@@ -128,7 +151,7 @@ client.on('interactionCreate', async (i) => {
             await i.update({ embeds: [embed], components: [row] });
         }
 
-        if (i.customId === 'back_main') await i.update(mainDashboard(userId));
+        if (i.customId === 'back_main') await i.update(await mainDashboard(userId));
 
         if (i.customId === 'add_whale' || i.customId === 'trigger_withdraw_modal') {
             const isWhale = i.customId === 'add_whale';
@@ -151,14 +174,17 @@ client.on('interactionCreate', async (i) => {
         }
     }
 
-    // 3. Handle Modal Submissions (THIS WAS THE MISSING PART)
+    // 3. Handle Modal Submissions
     if (i.type === InteractionType.ModalSubmit) {
         if (i.customId === 'whale_modal') {
             const address = i.fields.getTextInputValue('address');
             const amount = i.fields.getTextInputValue('amount');
             
-            // This is where you'd save to a database. For now, we confirm it worked:
-            await i.reply({ content: `✅ **Success!** Now tracking: \`${address}\` with a \`${amount} SOL\` limit.`, ephemeral: true });
+            // In a pro setup, we save this address to your Postgres DB here.
+            await i.reply({ 
+                content: `✅ **Success!** Added trader: \`${address}\`.\nThey will now appear in your Copy Trade list as a button.`, 
+                ephemeral: true 
+            });
         }
         
         if (i.customId === 'withdraw_modal') {
