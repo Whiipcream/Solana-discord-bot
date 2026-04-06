@@ -6,7 +6,7 @@ async function handleButtons(i, userId) {
     try {
         const cid = i.customId;
 
-        // --- 1. MODAL TRIGGERS (CRITICAL: Modals cannot be Deferred) ---
+        // --- 1. MODAL TRIGGERS ---
         if (cid === 'add_whale' || cid === 'trigger_withdraw_modal' || cid.startsWith('set_limit_')) {
             const modal = new ModalBuilder();
             
@@ -20,19 +20,12 @@ async function handleButtons(i, userId) {
                 const addr = new TextInputBuilder().setCustomId('address').setLabel("Destination Address").setStyle(TextInputStyle.Short).setRequired(true);
                 const amt = new TextInputBuilder().setCustomId('amount').setLabel("Amount").setStyle(TextInputStyle.Short).setPlaceholder("0.1").setRequired(true);
                 modal.addComponents(new ActionRowBuilder().addComponents(addr), new ActionRowBuilder().addComponents(amt));
-            } else if (cid.startsWith('set_limit_')) {
-                const id = cid.split('_')[2];
-                modal.setCustomId(`limit_modal_${id}`).setTitle('Update Limit');
-                const input = new TextInputBuilder().setCustomId('new_limit').setLabel("Max SOL").setStyle(TextInputStyle.Short).setRequired(true);
-                modal.addComponents(new ActionRowBuilder().addComponents(input));
             }
             
-            // We use .showModal() directly and RETURN so we don't hit the .deferUpdate() in index.js
             return await i.showModal(modal);
         }
 
-        // --- 2. DEFER ALL OTHER INTERACTIONS ---
-        // This stops the "InteractionNotReplied" error for menus and actions
+        // --- 2. DEFER UPDATE ---
         if (!i.deferred && !i.replied) await i.deferUpdate();
 
         // --- 3. NAVIGATION & MENUS ---
@@ -42,36 +35,31 @@ async function handleButtons(i, userId) {
             return await i.editReply(dashboardData);
         }
 
-        // 🟢 DISCOVERY MENU (Live Feed)
+        // 🟢 UPDATED: DISCOVERY MENU (DexScreener Trending)
         if (cid === 'menu_discovery') {
-            const traders = await getTopTradersFeed();
+            const tokens = await getTopTradersFeed();
             
-            if (!traders || traders.length === 0) {
-                return await i.editReply({ content: "⚠️ No live traders found. Check Birdeye API Key.", components: [
+            if (!tokens || tokens.length === 0) {
+                return await i.editReply({ content: "⚠️ No trending tokens found. Check RPC Connection.", components: [
                     new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))
                 ]});
             }
 
             const embed = new EmbedBuilder()
-                .setTitle('🔥 Live Top Traders (24h)')
-                .setDescription('High-profit wallets identified via Birdeye.')
+                .setTitle('🚀 Trending on Solana (DexScreener)')
+                .setDescription('Top active pairs right now. Click to Track/Buy.')
                 .setColor('#00ffcc');
 
-            // Limit to 4 to stay within Discord component limits
-            const rows = traders.slice(0, 4).map((t, idx) => {
-                const addr = t.address;
-                const pnl = t.pnl ? t.pnl.toFixed(2) : "0.00";
-                const roi = t.pnl_percent ? t.pnl_percent.toFixed(1) : "0";
-
+            const rows = tokens.map((t, idx) => {
                 embed.addFields({ 
-                    name: `#${idx + 1} | ${addr.slice(0,6)}...${addr.slice(-4)}`, 
-                    value: `PnL: +$${pnl} | ROI: ${roi}%`,
+                    name: `${t.symbol} | $${parseFloat(t.price).toFixed(4)}`, 
+                    value: `24h: ${t.pnl_percent > 0 ? '🟢' : '🔴'} ${t.pnl_percent}%`,
                     inline: true 
                 });
 
                 return new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`quick_copy_${addr}`).setLabel(`Copy #${idx + 1}`).setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setLabel('Solscan').setURL(`https://solscan.io/account/${addr}`).setStyle(ButtonStyle.Link)
+                    new ButtonBuilder().setCustomId(`quick_copy_${t.address}`).setLabel(`Track ${t.symbol}`).setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setLabel('Chart').setURL(`https://dexscreener.com/solana/${t.address}`).setStyle(ButtonStyle.Link)
                 );
             });
 
@@ -82,20 +70,22 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: rows });
         }
 
-        // 🟢 QUICK COPY LOGIC
+        // 🟢 QUICK COPY / TRACK LOGIC
         if (cid.startsWith('quick_copy_')) {
             const targetAddress = cid.split('_')[2];
+            // In the new logic, we add the TOKEN address to your tracker
             await addTrackedTrader(userId, targetAddress, "0.1");
             return await i.editReply({ 
-                content: `✅ Successfully following \`${targetAddress}\`!`, 
+                content: `✅ Now tracking token: \`${targetAddress}\`!`, 
                 embeds: [], 
                 components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('menu_copytrade').setLabel('View My Traders').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('menu_copytrade').setLabel('View My Targets').setStyle(ButtonStyle.Primary),
                     new ButtonBuilder().setCustomId('back_main').setLabel('Main Menu').setStyle(ButtonStyle.Secondary)
                 )]
             });
         }
 
+        // --- REMAINDER OF YOUR CODE (Positions, Withdraw, Settings) ---
         if (cid === 'menu_positions') {
             const wallet = await getOrCreateWallet(userId);
             const embed = new EmbedBuilder()
@@ -129,8 +119,8 @@ async function handleButtons(i, userId) {
 
         if (cid === 'menu_copytrade') {
             const traders = await getTrackedTraders(userId);
-            const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
-                .setDescription(traders.length > 0 ? 'Select a wallet to manage.' : 'No targets yet.');
+            const embed = new EmbedBuilder().setTitle('👥 Tracked Wallets/Tokens').setColor('#2ecc71')
+                .setDescription(traders.length > 0 ? 'Select a target to manage.' : 'No targets yet.');
 
             const rows = traders.slice(0, 3).map(t => new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
@@ -159,10 +149,10 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: [row] });
         }
 
-        // --- 4. TRADER ACTIONS ---
+        // --- TRADER ACTIONS ---
         if (cid.startsWith('manage_trader_')) {
             const id = cid.split('_')[2];
-            const embed = new EmbedBuilder().setTitle('⚙️ Manage Trader').setDescription(`Settings for Target ID: ${id}`).setColor('#f1c40f');
+            const embed = new EmbedBuilder().setTitle('⚙️ Manage Target').setDescription(`Settings for ID: ${id}`).setColor('#f1c40f');
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`pause_${id}`).setLabel('⏸️ Pause/Resume').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(`remove_${id}`).setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
@@ -176,20 +166,16 @@ async function handleButtons(i, userId) {
             if (cid.startsWith('pause_')) await toggleTraderStatus(id);
             if (cid.startsWith('remove_')) await deleteTrader(id);
             
-            // After action, show copytrade menu again to confirm change
-            const traders = await getTrackedTraders(userId);
-            const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
-                .setDescription('✅ List Updated.');
+            const embed = new EmbedBuilder().setTitle('👥 Target Updated').setColor('#2ecc71')
+                .setDescription('✅ Target successfully updated.');
             
-            return await i.editReply({ embeds: [embed], components: [] }); 
+            return await i.editReply({ embeds: [embed], components: [
+                new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('menu_copytrade').setLabel('Back to List').setStyle(ButtonStyle.Primary))
+            ]}); 
         }
 
     } catch (error) {
         console.error("Button Execution Error:", error);
-        // Error handling that doesn't crash the bot
-        if (i.deferred || i.replied) {
-            await i.editReply({ content: "⚠️ System delay or API Error. Please try again in 5 seconds.", embeds: [], components: [] });
-        }
     }
 }
 
