@@ -23,10 +23,10 @@ function startHeartbeat() {
     const RENDER_URL = "https://solana-discord-bot-chai.onrender.com"; 
     setInterval(async () => {
         try {
-            // High-frequency ping to prevent Render's CPU sleep
+            // Keep CPU "hot" so the bot responds instantly
             await axios.get(`${RENDER_URL}/ping?t=${Date.now()}`);
         } catch (e) {
-            // Silently fail
+            // Silently fail to keep logs clean
         }
     }, 2000); 
 }
@@ -64,34 +64,36 @@ client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
     
     try {
+        // --- 1. HANDLE SLASH COMMANDS ---
         if (i.isChatInputCommand() && i.commandName === 'start') {
-            // 1. Check if we already acknowledged this
             if (i.deferred || i.replied) return;
 
-            // 2. Tell Discord we are working (gives us a 15-min window)
             await i.deferReply(); 
-            
-            // 3. Fetch the dashboard (Wallet + Balance)
             const dashboardData = await mainDashboard(userId);
             
-            // 4. Safe Edit: Prevents "Unknown Interaction" if Discord times out the token
             try {
                 return await i.editReply(dashboardData);
             } catch (err) {
-                console.log("⚠️ EditReply failed, attempting FollowUp...");
+                // If edit fails (timeout), use followUp as a backup
+                console.log("⚠️ EditReply failed, sending FollowUp...");
                 return await i.followUp(dashboardData);
             }
         }
         
+        // --- 2. HANDLE BUTTONS ---
         if (i.isButton()) {
+            // Acknowledge the button immediately to stop the "thinking" state
+            if (!i.deferred && !i.replied) await i.deferUpdate().catch(() => null);
             return await handleButtons(i, userId);
         }
         
+        // --- 3. HANDLE MODALS ---
         if (i.type === InteractionType.ModalSubmit) {
             return await handleModals(i, userId);
         }
     } catch (error) {
         console.error("Critical Interaction Error:", error);
+        // Only attempt to reply if we haven't sent anything yet
         if (!i.replied && !i.deferred) {
             await i.reply({ content: "⚠️ System busy. Please try again.", ephemeral: true }).catch(() => null);
         }
@@ -100,7 +102,8 @@ client.on('interactionCreate', async (i) => {
 
 // --- GLOBAL ERROR CATCHERS ---
 process.on('unhandledRejection', error => {
-    if (error.code === 10062) return; // Ignore "Unknown Interaction" logs to keep it clean
+    // Silence common Discord timeout errors from flooding the console
+    if (error.code === 10062 || error.code === 40060) return; 
     console.error('Unhandled promise rejection:', error);
 });
 
