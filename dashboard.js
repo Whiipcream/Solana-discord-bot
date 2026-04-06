@@ -2,34 +2,36 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { getOrCreateWallet } = require('./walletManager');
 
-// --- THE FIX: BULLETPROOF BALANCE CHECK ---
-async function getBalance(pubkey) {
-    const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
-    
-    // We set a manual 10-second timeout for the connection
-    const connection = new Connection(HELIUS_RPC, {
-        commitment: 'confirmed',
-        confirmTransactionInitialTimeout: 10000
-    });
+// --- 🛠️ THE "BULLETPROOF" CONNECTION ---
+// We define this OUTSIDE the function so it stays "warm"
+const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
+const connection = new Connection(HELIUS_RPC, {
+    commitment: 'confirmed',
+    fetchMiddleware: (url, options) => {
+        options.timeout = 15000; // Give it 15 seconds to respond
+        return fetch(url, options);
+    }
+});
 
+async function getBalance(pubkey) {
     for (let i = 0; i < 3; i++) {
         try {
-            console.log(`[Attempt ${i+1}] Fetching balance for: ${pubkey}`);
+            console.log(`[Attempt ${i+1}] Checking balance for: ${pubkey}`);
             const balance = await connection.getBalance(new PublicKey(pubkey));
             return (balance / 1000000000).toFixed(3); 
         } catch (e) {
-            console.error(`Balance Fetch Failed (Attempt ${i+1}):`, e.message);
-            // Wait 1 second before retrying
-            await new Promise(res => setTimeout(res, 1000));
+            console.error(`❌ Balance Fetch Failed: ${e.message}`);
+            // Wait 2 seconds before trying again
+            await new Promise(res => setTimeout(res, 2000));
         }
     }
-    return "Checking..."; // If it fails 3 times, show this instead of 0.00
+    return "0.00 (Syncing...)"; 
 }
 
 const mainDashboard = async (userId) => {
     const wallet = await getOrCreateWallet(userId);
     
-    // Get the real balance
+    // This is the line that actually pulls the money info
     const actualBalance = await getBalance(wallet.publicKey);
 
     return {
@@ -37,7 +39,7 @@ const mainDashboard = async (userId) => {
             .setTitle('🍾 Champagne Services | Terminal')
             .setDescription(`**Wallet:** \`${wallet.publicKey}\`\n**Balance:** \`${actualBalance} SOL\``)
             .setColor('#FFD700')
-            .setFooter({ text: 'Refresh by clicking any button or typing /start' })],
+            .setFooter({ text: 'If balance is 0.00, click a button to refresh.' })],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('menu_positions').setLabel('📈 Positions').setStyle(ButtonStyle.Primary),
