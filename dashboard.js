@@ -11,36 +11,33 @@ const RPC_ENDPOINTS = [
 async function getBalance(pubkey) {
     for (const url of RPC_ENDPOINTS) {
         try {
-            console.log(`[SYSTEM] Attempting balance check via: ${url.split('?')[0]}`);
+            // Log the attempt without leaking the full API key in logs
+            console.log(`[SYSTEM] Syncing with RPC: ${url.includes('helius') ? 'Helius' : 'Solana Mainnet'}`);
             
             const connection = new Connection(url, {
                 commitment: 'confirmed',
-                confirmTransactionInitialTimeout: 20000 // 20 seconds for slow networks
+                confirmTransactionInitialTimeout: 30000 // 30s for Render's slow outgoing network
             });
 
             const pubKeyObject = new PublicKey(pubkey);
             
-            // Adding a small delay for the first attempt to allow network propagation
-            const balance = await connection.getBalance(pubKeyObject);
+            // USE getAccountInfo instead of getBalance to bypass basic caching
+            const accountInfo = await connection.getAccountInfo(pubKeyObject);
             
-            const solValue = (balance / 1000000000).toFixed(3);
+            // If accountInfo is null, the wallet is brand new (0 SOL)
+            const lamports = accountInfo ? accountInfo.lamports : 0;
+            const solValue = (lamports / 1000000000).toFixed(3);
             
-            // If balance is exactly 0, we log it specifically to help you debug
-            if (parseFloat(solValue) === 0) {
-                console.log(`ℹ️ [DB] Wallet ${pubkey} is currently empty on this RPC.`);
-            } else {
-                console.log(`✅ [SUCCESS] Found ${solValue} SOL`);
-            }
-            
+            console.log(`✅ [SUCCESS] ${url.includes('helius') ? 'Helius' : 'Mainnet'} reported ${solValue} SOL`);
             return solValue;
 
         } catch (e) {
-            console.error(`⚠️ [RETRY] RPC failed: ${e.message}`);
-            // Wait 1 second before trying the next RPC
-            await new Promise(res => setTimeout(res, 1000));
+            console.error(`⚠️ [RPC ERROR] ${url.includes('helius') ? 'Helius' : 'Mainnet'} timed out: ${e.message}`);
+            // Wait slightly before trying the backup to avoid hitting Render's rate limit
+            await new Promise(res => setTimeout(res, 1500));
         }
     }
-    return "0.00 (Syncing...)"; 
+    return "0.00 (Network Lag)"; 
 }
 
 const mainDashboard = async (userId) => {
@@ -52,13 +49,15 @@ const mainDashboard = async (userId) => {
         const actualBalance = await getBalance(wallet.publicKey);
 
         // 3. Build the Terminal UI
+        const dashboardEmbed = new EmbedBuilder()
+            .setTitle('🍾 Champagne Services | Terminal')
+            .setDescription(`**Wallet Address:**\n\`${wallet.publicKey}\`\n\n**Available Balance:**\n\`${actualBalance} SOL\``)
+            .setColor('#FFD700')
+            .setTimestamp()
+            .setFooter({ text: 'Last Synced' });
+
         return {
-            embeds: [new EmbedBuilder()
-                .setTitle('🍾 Champagne Services | Terminal')
-                .setDescription(`**Wallet Address:**\n\`${wallet.publicKey}\`\n\n**Available Balance:**\n\`${actualBalance} SOL\``)
-                .setColor('#FFD700')
-                .setTimestamp()
-                .setFooter({ text: 'Updates every /start or button click' })],
+            embeds: [dashboardEmbed],
             components: [
                 new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('menu_positions').setLabel('📈 Positions').setStyle(ButtonStyle.Primary),
@@ -71,8 +70,8 @@ const mainDashboard = async (userId) => {
             ]
         };
     } catch (err) {
-        console.error("Dashboard Build Error:", err);
-        return { content: "⚠️ Error loading dashboard. Check bot logs." };
+        console.error("CRITICAL: Dashboard Build Error:", err);
+        return { content: "⚠️ **Terminal Error:** Could not connect to the database or blockchain. Please try again in a few seconds." };
     }
 };
 
