@@ -1,36 +1,27 @@
 const { Pool } = require('pg');
-const { Keypair } = require('@solana/web3.js');
+const { Keypair, Connection, PublicKey } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const axios = require('axios');
 
-// --- 🛠️ CONNECTION POOL ---
+// --- 🛠️ CONNECTIONS ---
 const db = new Pool({ 
     connectionString: process.env.DATABASE_URL, 
     ssl: { rejectUnauthorized: false },
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    max: 10
 });
 
-// --- 🌐 BIRDEYE API INSTANCE ---
-// Cleaned up headers to ensure Birdeye accepts the key
-const birdeye = axios.create({
-    baseURL: 'https://public-api.birdeye.so',
-    headers: { 
-        'X-API-KEY': (process.env.BIRDEYE_API_KEY || '').trim(), 
-        'x-chain': 'solana',
-        'accept': 'application/json'
-    },
-    timeout: 8000 
-});
+// Use your Helius RPC URL from Render env variables
+const connection = new Connection(process.env.RPC_URL || "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY");
+
+// --- 📊 JUPITER & DEXSCREENER INSTANCES (No Keys Required) ---
+const jupiter = axios.create({ baseURL: 'https://api.jup.ag/price/v2' });
+const dexscreener = axios.create({ baseURL: 'https://api.dexscreener.com/latest/dex' });
 
 // --- 🚀 DATABASE SETUP ---
 async function setupDatabase() {
     try {
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets (user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, secret_key TEXT NOT NULL)`);
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets_traders (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, trader_address TEXT NOT NULL, status TEXT DEFAULT 'active', trade_limit TEXT DEFAULT '0.1')`);
-        
-        // Ensure trade_limit column exists for older database versions
         await db.query(`ALTER TABLE champagne_wallets_traders ADD COLUMN IF NOT EXISTS trade_limit TEXT DEFAULT '0.1'`);
         console.log('✅ [DB] Schema verified.');
     } catch (err) {
@@ -39,51 +30,51 @@ async function setupDatabase() {
 }
 setupDatabase();
 
-// --- 📊 BIRDEYE PORTFOLIO LOGIC ---
+// --- 📈 NEW: GET WALLET STATS (Blockchain Native) ---
 async function getWalletStats(address) {
     try {
-        const res = await birdeye.get('/v1/wallet/token_list', {
-            params: { wallet: address }
+        const pubKey = new PublicKey(address);
+        
+        // 1. Fetch raw SOL balance directly from the chain
+        const balance = await connection.getBalance(pubKey);
+        const solAmount = balance / 1e9;
+
+        // 2. Fetch SOL Price from Jupiter
+        const priceRes = await jupiter.get('', { 
+            params: { ids: 'So11111111111111111111111111111111111111112' } 
         });
-        
-        if (!res.data || !res.data.data) throw new Error("No data returned");
-        
-        const data = res.data.data;
-        const solToken = data.items.find(i => i.symbol === 'SOL');
-        
+        const solPrice = priceRes.data.data['So11111111111111111111111111111111111111112']?.price || 0;
+
+        const totalUsd = solAmount * solPrice;
+
         return {
-            solBalance: solToken ? solToken.uiAmount.toFixed(3) : "0.000",
-            totalUsd: (data.totalUsd || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-            tokenCount: data.items ? data.items.length : 0
+            solBalance: solAmount.toFixed(3),
+            totalUsd: totalUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+            tokenCount: "Active" 
         };
     } catch (e) {
-        // Detailed logging to identify if the key is the issue
-        console.error(`❌ Birdeye Sync Error [${e.response?.status || 'Timeout'}]:`, e.response?.data || e.message);
+        console.error("❌ Stats Sync Error:", e.message);
         return { solBalance: "0.000", totalUsd: "$0.00", tokenCount: 0 };
     }
 }
 
-// --- 🔥 DISCOVERY FEED ---
+// --- 🔥 NEW: DISCOVERY FEED (DexScreener Trending) ---
 async function getTopTradersFeed() {
     try {
-        const res = await birdeye.get('/trader/gainers-losers', {
-            params: {
-                type: 'today',
-                sort_by: 'pnl',
-                limit: 5
-            }
-        });
+        // Fetch trending Solana pairs
+        const res = await dexscreener.get('/tokens/v1/solana/So11111111111111111111111111111111111111112');
         
-        if (res.data && res.data.success && res.data.data) {
-            return res.data.data.items || [];
-        }
-        return [];
+        if (!res.data || !Array.isArray(res.data)) return [];
+
+        // Return top 5 pairs formatted for your Discord buttons
+        return res.data.slice(0, 5).map(pair => ({
+            address: pair.baseToken.address, // The token mint address
+            symbol: pair.baseToken.symbol,
+            price: pair.priceUsd,
+            pnl_percent: parseFloat(pair.priceChange?.h24 || 0)
+        }));
     } catch (e) {
-        if (e.response?.status === 429) {
-            console.warn("⚠️ Rate Limit Hit: Birdeye Free Tier allows 1 req/sec.");
-        } else {
-            console.error(`❌ Top Traders Error [${e.response?.status}]:`, e.message);
-        }
+        console.error("❌ DexScreener Error:", e.message);
         return [];
     }
 }
@@ -109,7 +100,6 @@ const getOrCreateWallet = async (userId) => {
                 [userId, wallet.publicKey, wallet.secretKey]);
         }
         
-        // Fetch real-time stats from Birdeye
         const stats = await getWalletStats(wallet.publicKey);
         return { ...wallet, ...stats };
 
