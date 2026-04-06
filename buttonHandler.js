@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { mainDashboard } = require('./dashboard'); 
-const { getTrackedTraders, toggleTraderStatus, deleteTrader, getOrCreateWallet } = require('./walletManager');
+const { getTrackedTraders, toggleTraderStatus, deleteTrader, getOrCreateWallet, addTrackedTrader, getTopTradersFeed } = require('./walletManager');
 
 async function handleButtons(i, userId) {
     try {
@@ -37,10 +37,53 @@ async function handleButtons(i, userId) {
             return await i.editReply(dashboardData);
         }
 
+        // 🟢 NEW: DISCOVERY MENU (Live Feed)
+        if (cid === 'menu_discovery') {
+            const traders = await getTopTradersFeed();
+            const embed = new EmbedBuilder()
+                .setTitle('🔥 Live Top Traders (24h)')
+                .setDescription('High-profit wallets identified via Birdeye. Click to Copy.')
+                .setColor('#00ffcc');
+
+            const rows = traders.slice(0, 4).map((t, idx) => {
+                const addr = t.address;
+                embed.addFields({ 
+                    name: `#${idx + 1} | ${addr.slice(0,6)}...`, 
+                    value: `PnL: +$${t.pnl.toFixed(2)} | ROI: ${t.pnl_percent.toFixed(1)}%`,
+                    inline: true 
+                });
+                return new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`quick_copy_${addr}`).setLabel(`Copy #${idx + 1}`).setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setLabel('Solscan').setURL(`https://solscan.io/account/${addr}`).setStyle(ButtonStyle.Link)
+                );
+            });
+
+            rows.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+            ));
+
+            return await i.editReply({ embeds: [embed], components: rows });
+        }
+
+        // 🟢 NEW: QUICK COPY LOGIC
+        if (cid.startsWith('quick_copy_')) {
+            const targetAddress = cid.split('_')[2];
+            await addTrackedTrader(userId, targetAddress, "0.1"); // Safe default limit
+            return await i.editReply({ 
+                content: `✅ Successfully following \`${targetAddress}\`!`, 
+                embeds: [], 
+                components: [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('menu_copytrade').setLabel('View My Traders').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('back_main').setLabel('Main Menu').setStyle(ButtonStyle.Secondary)
+                )]
+            });
+        }
+
         if (cid === 'menu_positions') {
+            const wallet = await getOrCreateWallet(userId);
             const embed = new EmbedBuilder()
                 .setTitle('📈 Your Positions')
-                .setDescription('**Token:** `$SOL` | **Value:** 0.00\n*Select a coin below to manage individually.*')
+                .setDescription(`**Total Value:** ${wallet.totalUsd}\n*Live token tracking active.*`)
                 .setColor('#5865F2');
             const rows = [
                 new ActionRowBuilder().addComponents(
@@ -48,7 +91,6 @@ async function handleButtons(i, userId) {
                     new ButtonBuilder().setCustomId('sell_all').setLabel('Sell All').setStyle(ButtonStyle.Danger)
                 ),
                 new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('refresh_pos').setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary),
                     new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
                 )
             ];
@@ -57,12 +99,9 @@ async function handleButtons(i, userId) {
 
         if (cid === 'menu_withdraw') {
             const wallet = await getOrCreateWallet(userId);
-            // Assuming you have a getBalance helper in walletManager
-            const balance = wallet.balance || "0.00"; 
-            
             const embed = new EmbedBuilder()
                 .setTitle('💸 Withdraw Funds')
-                .setDescription(`**Available Balance:** \`${balance} SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
+                .setDescription(`**Available Balance:** \`${wallet.solBalance} SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
                 .setColor('#e74c3c');
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('trigger_withdraw_modal').setLabel('Withdraw to Wallet').setStyle(ButtonStyle.Danger),
@@ -90,7 +129,6 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: rows });
         }
 
-        // --- 🟢 NEW: SETTINGS BLOCK ---
         if (cid === 'menu_settings') {
             const embed = new EmbedBuilder()
                 .setTitle('⚙️ Terminal Settings')
