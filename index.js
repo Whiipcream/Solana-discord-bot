@@ -1,4 +1,4 @@
-const express = require('express'); // Fixed: lowercase 'c'
+const express = require('express'); 
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
 const { startWatching } = require('./watcher'); 
 const axios = require('axios'); 
@@ -73,11 +73,12 @@ client.on('interactionCreate', async (i) => {
             const isModalTrigger = modalButtons.includes(i.customId) || i.customId.startsWith('set_limit_');
 
             if (!isModalTrigger) {
-                // For all other buttons (navigation/actions), acknowledge INSTANTLY
-                // This stops the "Interaction Failed" error on cold starts
+                // FOR ALL OTHER BUTTONS: Acknowledge INSTANTLY.
+                // This prevents the "Interaction Failed" error on cold starts/checking features.
                 await i.deferUpdate().catch(() => null);
             }
 
+            // Now handleButtons can take its time fetching "True Balances" or database info.
             return await handleButtons(i, userId);
         }
         
