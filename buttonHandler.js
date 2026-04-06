@@ -7,7 +7,6 @@ async function handleButtons(i, userId) {
         const cid = i.customId;
 
         // --- 1. MODAL TRIGGERS ---
-        // (index.js does NOT defer these, so showModal works perfectly)
         if (cid === 'add_whale' || cid === 'trigger_withdraw_modal' || cid.startsWith('set_limit_')) {
             const modal = new ModalBuilder();
             
@@ -32,7 +31,6 @@ async function handleButtons(i, userId) {
         }
 
         // --- 2. NAVIGATION & MENUS ---
-        // (index.js HAS already deferred these, so we use editReply)
         
         if (cid === 'back_main') {
             const dashboardData = await mainDashboard(userId);
@@ -59,9 +57,12 @@ async function handleButtons(i, userId) {
 
         if (cid === 'menu_withdraw') {
             const wallet = await getOrCreateWallet(userId);
+            // Assuming you have a getBalance helper in walletManager
+            const balance = wallet.balance || "0.00"; 
+            
             const embed = new EmbedBuilder()
                 .setTitle('💸 Withdraw Funds')
-                .setDescription(`**Available Balance:** \`Checking...\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
+                .setDescription(`**Available Balance:** \`${balance} SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
                 .setColor('#e74c3c');
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('trigger_withdraw_modal').setLabel('Withdraw to Wallet').setStyle(ButtonStyle.Danger),
@@ -89,7 +90,21 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: rows });
         }
 
-        // --- 3. ACTIONS (Pause/Remove/Manage) ---
+        // --- 🟢 NEW: SETTINGS BLOCK ---
+        if (cid === 'menu_settings') {
+            const embed = new EmbedBuilder()
+                .setTitle('⚙️ Terminal Settings')
+                .setDescription('**Priority Fee:** `0.001 SOL`\n**Slippage:** `10%`\n**Auto-Confirm:** `Enabled`')
+                .setColor('#95a5a6');
+            
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+            );
+
+            return await i.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // --- 3. ACTIONS ---
         if (cid.startsWith('manage_trader_')) {
             const id = cid.split('_')[2];
             const embed = new EmbedBuilder().setTitle('⚙️ Manage Trader').setDescription(`Settings for Target ID: ${id}`).setColor('#f1c40f');
@@ -115,7 +130,6 @@ async function handleButtons(i, userId) {
 
     } catch (error) {
         console.error("Button Execution Error:", error);
-        // Fallback for errors
         try {
             if (i.deferred || i.replied) {
                 await i.editReply({ content: "⚠️ System delay. Please try again." });
