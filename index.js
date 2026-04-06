@@ -1,11 +1,11 @@
 const express = require('express');
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
+require('dotenv').config();
 
-// --- FIXED: Looking for files in the same folder, not a 'ui' folder ---
+// --- FIXED: No /ui/ folder, just look in the main directory ---
 const { mainDashboard } = require('./dashboard'); 
 const { handleButtons } = require('./buttonHandler');
 const { handleModals } = require('./modalHandler');
-require('dotenv').config();
 
 const app = express();
 app.get('/', (req, res) => res.send('Champagne Terminal Online! 🥂'));
@@ -22,22 +22,20 @@ client.on('ready', async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    } catch (error) { 
-        console.error('Command Error:', error); 
-    }
+    } catch (error) { console.error('Command Error:', error); }
 });
 
 client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
-
-    if (i.isChatInputCommand() && i.commandName === 'start') {
-        const ui = await mainDashboard(userId);
-        return await i.reply(ui);
+    try {
+        if (i.isChatInputCommand() && i.commandName === 'start') {
+            return await i.reply(await mainDashboard(userId));
+        }
+        if (i.isButton()) return await handleButtons(i, userId);
+        if (i.type === InteractionType.ModalSubmit) return await handleModals(i, userId);
+    } catch (err) {
+        console.error('Interaction Error:', err);
     }
-
-    if (i.isButton()) return await handleButtons(i, userId);
-
-    if (i.type === InteractionType.ModalSubmit) return await handleModals(i, userId);
 });
 
 client.login(process.env.DISCORD_TOKEN);
