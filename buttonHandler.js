@@ -6,8 +6,7 @@ async function handleButtons(i, userId) {
     try {
         const cid = i.customId;
 
-        // --- 1. MODAL TRIGGERS (CRITICAL FIX) ---
-        // Modals MUST be shown BEFORE any deferUpdate() happens.
+        // --- 1. MODAL TRIGGERS (Must happen before any update/defer) ---
         if (cid === 'add_whale' || cid === 'trigger_withdraw_modal' || cid.startsWith('set_limit_')) {
             const modal = new ModalBuilder();
             
@@ -31,10 +30,10 @@ async function handleButtons(i, userId) {
             return await i.showModal(modal);
         }
 
-        // --- 2. NAVIGATION & UI UPDATES ---
+        // --- 2. NAVIGATION & MENUS ---
         if (cid === 'back_main') {
-            const dashboard = await mainDashboard(userId);
-            return await i.update(dashboard);
+            const dashboardData = await mainDashboard(userId);
+            return await i.update(dashboardData);
         }
 
         if (cid === 'menu_positions') {
@@ -59,7 +58,7 @@ async function handleButtons(i, userId) {
             const wallet = await getOrCreateWallet(userId);
             const embed = new EmbedBuilder()
                 .setTitle('💸 Withdraw Funds')
-                .setDescription(`**Available Balance:** \`0.00 SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
+                .setDescription(`**Available Balance:** \`Checking...\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
                 .setColor('#e74c3c');
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('trigger_withdraw_modal').setLabel('Withdraw to Wallet').setStyle(ButtonStyle.Danger),
@@ -87,25 +86,27 @@ async function handleButtons(i, userId) {
             return await i.update({ embeds: [embed], components: rows });
         }
 
-        // --- 3. BACKGROUND ACTIONS (Pause/Remove) ---
+        // --- 3. ACTIONS (Pause/Remove) ---
         if (cid.startsWith('pause_') || cid.startsWith('remove_')) {
             const id = cid.split('_')[1];
             
+            // Acknowledge immediately so the user doesn't wait for DB
+            if (!i.deferred && !i.replied) await i.deferUpdate();
+
             if (cid.startsWith('pause_')) await toggleTraderStatus(id);
             if (cid.startsWith('remove_')) await deleteTrader(id);
-
-            // After action, refresh the Copy Trade view
+            
             const traders = await getTrackedTraders(userId);
             const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
-                .setDescription(traders.length > 0 ? 'List Updated.' : 'No targets yet.');
+                .setDescription('✅ List Updated.');
             
-            return await i.update({ embeds: [embed] }); // Refresh UI instead of followUp
+            return await i.editReply({ embeds: [embed], content: null }); 
         }
 
     } catch (error) {
-        console.error("Critical Button Error:", error);
+        console.error("Button Execution Error:", error);
         if (!i.replied && !i.deferred) {
-            await i.reply({ content: "⚠️ An error occurred. Please try again.", ephemeral: true }).catch(() => null);
+            await i.reply({ content: "⚠️ System delay. Please try again.", ephemeral: true }).catch(() => null);
         }
     }
 }
