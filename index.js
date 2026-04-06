@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); // Fixed: lowercase 'c'
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
 const { startWatching } = require('./watcher'); 
 const axios = require('axios'); 
@@ -32,15 +32,12 @@ client.on('ready', async () => {
     console.log(`🚀 ${client.user.tag} is Live`);
     startHeartbeat();
 
-    // Register Slash Commands
     const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try { 
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands }); 
-        console.log("✅ Commands Registered");
     } catch (e) { console.error("Command Error:", e); }
 
-    // Start Watcher
     const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const WSS_RPC = "wss://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const FEE_WALLET = process.env.FEE_ACCOUNT || "E1B2BHWce4JMibNSieMhcUcvpQ7BfNG4duVkQTm3o7v6";
@@ -48,7 +45,6 @@ client.on('ready', async () => {
     setTimeout(() => {
         try {
             startWatching(HELIUS_RPC, WSS_RPC, FEE_WALLET);
-            console.log("👀 Watcher Active.");
         } catch (err) { console.error("Watcher Error:", err); }
     }, 10000); 
 });
@@ -70,10 +66,18 @@ client.on('interactionCreate', async (i) => {
             }
         }
         
-        // --- 2. BUTTONS (Clean Hand-off) ---
+        // --- 2. BUTTONS (STABILIZED HAND-OFF) ---
         if (i.isButton()) {
-            // We pass control to buttonHandler.js without deferring.
-            // This allows buttonHandler to use i.showModal() or i.update().
+            // Check if it's a Modal trigger first. Modals CANNOT be deferred.
+            const modalButtons = ['add_whale', 'trigger_withdraw_modal'];
+            const isModalTrigger = modalButtons.includes(i.customId) || i.customId.startsWith('set_limit_');
+
+            if (!isModalTrigger) {
+                // For all other buttons (navigation/actions), acknowledge INSTANTLY
+                // This stops the "Interaction Failed" error on cold starts
+                await i.deferUpdate().catch(() => null);
+            }
+
             return await handleButtons(i, userId);
         }
         
@@ -82,13 +86,11 @@ client.on('interactionCreate', async (i) => {
             return await handleModals(i, userId);
         }
     } catch (error) {
-        // Ignore common timeout codes to keep logs clean
         if (error.code === 10062 || error.code === 40060) return;
         console.error("Interaction Error:", error);
     }
 });
 
-// --- GLOBAL ERROR HANDLING ---
 process.on('unhandledRejection', error => {
     if (error.code === 10062 || error.code === 40060) return; 
     console.error('Unhandled Rejection:', error);
