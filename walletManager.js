@@ -10,41 +10,44 @@ const db = new Pool({
     max: 10
 });
 
-// Use your Helius RPC URL from Render env variables
-const connection = new Connection(process.env.RPC_URL || "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY");
+// Use Helius RPC URL from your Environment Variables
+const connection = new Connection(process.env.RPC_URL || "");
 
-// --- 📊 JUPITER & DEXSCREENER INSTANCES (No Keys Required) ---
+// --- 📊 JUPITER & DEXSCREENER ---
 const jupiter = axios.create({ baseURL: 'https://api.jup.ag/price/v2' });
 const dexscreener = axios.create({ baseURL: 'https://api.dexscreener.com/latest/dex' });
 
-// --- 🚀 DATABASE SETUP ---
+// --- 🚀 DATABASE SETUP (Fixed Deprecation) ---
 async function setupDatabase() {
+    const client = await db.connect();
     try {
-        await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets (user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, secret_key TEXT NOT NULL)`);
-        await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets_traders (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, trader_address TEXT NOT NULL, status TEXT DEFAULT 'active', trade_limit TEXT DEFAULT '0.1')`);
-        await db.query(`ALTER TABLE champagne_wallets_traders ADD COLUMN IF NOT EXISTS trade_limit TEXT DEFAULT '0.1'`);
+        await client.query(`CREATE TABLE IF NOT EXISTS champagne_wallets (user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, secret_key TEXT NOT NULL)`);
+        await client.query(`CREATE TABLE IF NOT EXISTS champagne_wallets_traders (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, trader_address TEXT NOT NULL, status TEXT DEFAULT 'active', trade_limit TEXT DEFAULT '0.1')`);
+        await client.query(`ALTER TABLE champagne_wallets_traders ADD COLUMN IF NOT EXISTS trade_limit TEXT DEFAULT '0.1'`);
         console.log('✅ [DB] Schema verified.');
     } catch (err) {
         console.error('❌ [DB] Setup Error:', err);
+    } finally {
+        client.release();
     }
 }
 setupDatabase();
 
-// --- 📈 NEW: GET WALLET STATS (Blockchain Native) ---
+// --- 📈 WALLET STATS (Fixed 404) ---
 async function getWalletStats(address) {
     try {
         const pubKey = new PublicKey(address);
         
-        // 1. Fetch raw SOL balance directly from the chain
+        // 1. Fetch SOL balance directly from chain
         const balance = await connection.getBalance(pubKey);
         const solAmount = balance / 1e9;
 
-        // 2. Fetch SOL Price from Jupiter
-        const priceRes = await jupiter.get('', { 
-            params: { ids: 'So11111111111111111111111111111111111111112' } 
-        });
-        const solPrice = priceRes.data.data['So11111111111111111111111111111111111111112']?.price || 0;
-
+        // 2. Fetch Price (Jupiter v2 mapping fix)
+        const solMint = 'So11111111111111111111111111111111111111112';
+        const priceRes = await jupiter.get('', { params: { ids: solMint } });
+        
+        // Jupiter v2 response structure is res.data.data[mint].price
+        const solPrice = priceRes.data?.data?.[solMint]?.price || 0;
         const totalUsd = solAmount * solPrice;
 
         return {
@@ -58,28 +61,38 @@ async function getWalletStats(address) {
     }
 }
 
-// --- 🔥 NEW: DISCOVERY FEED (DexScreener Trending) ---
+// --- 🔥 DISCOVERY FEED (Fixed 429 with 60s Cache) ---
+let discoveryCache = null;
+let lastDiscoveryFetch = 0;
+
 async function getTopTradersFeed() {
+    const now = Date.now();
+    // Only fetch from DexScreener if cache is older than 60 seconds
+    if (discoveryCache && (now - lastDiscoveryFetch < 60000)) {
+        return discoveryCache;
+    }
+
     try {
-        // Fetch trending Solana pairs
         const res = await dexscreener.get('/tokens/v1/solana/So11111111111111111111111111111111111111112');
         
-        if (!res.data || !Array.isArray(res.data)) return [];
+        if (!res.data || !Array.isArray(res.data)) return discoveryCache || [];
 
-        // Return top 5 pairs formatted for your Discord buttons
-        return res.data.slice(0, 5).map(pair => ({
-            address: pair.baseToken.address, // The token mint address
+        discoveryCache = res.data.slice(0, 5).map(pair => ({
+            address: pair.baseToken.address, 
             symbol: pair.baseToken.symbol,
             price: pair.priceUsd,
             pnl_percent: parseFloat(pair.priceChange?.h24 || 0)
         }));
+        
+        lastDiscoveryFetch = now;
+        return discoveryCache;
     } catch (e) {
         console.error("❌ DexScreener Error:", e.message);
-        return [];
+        return discoveryCache || [];
     }
 }
 
-// --- 💳 WALLET LOGIC ---
+// --- 💳 WALLET & TRADER LOGIC ---
 const getOrCreateWallet = async (userId) => {
     try {
         const res = await db.query('SELECT * FROM champagne_wallets WHERE user_id = $1', [userId]);
@@ -109,7 +122,6 @@ const getOrCreateWallet = async (userId) => {
     }
 };
 
-// --- 👥 TRADER MANAGEMENT ---
 const addTrackedTrader = async (userId, address, limit) => {
     await db.query('INSERT INTO champagne_wallets_traders (user_id, trader_address, trade_limit) VALUES ($1, $2, $3)', [userId, address, limit]);
 };
