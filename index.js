@@ -1,6 +1,7 @@
 const express = require('express');
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
 const { startWatching } = require('./watcher'); 
+const axios = require('axios'); // Added axios for heartbeat
 require('dotenv').config();
 
 const { mainDashboard } = require('./dashboard'); 
@@ -8,16 +9,36 @@ const { handleButtons } = require('./buttonHandler');
 const { handleModals } = require('./modalHandler');
 
 const app = express();
+
+// --- 🟢 KEEP-ALIVE ROUTES ---
 app.get('/', (req, res) => res.send('Champagne Terminal Online! 🥂'));
+app.get('/ping', (req, res) => res.status(200).send('pong')); // Lightweight ping endpoint
+
 app.listen(process.env.PORT || 3000, '0.0.0.0');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 
+// --- 💓 THE HEARTBEAT FUNCTION ---
+// This hits your own server every 5 seconds to keep the CPU "hot"
+function startHeartbeat() {
+    const RENDER_URL = "https://solana-discord-bot-chai.onrender.com"; 
+    setInterval(async () => {
+        try {
+            await axios.get(`${RENDER_URL}/ping?t=${Date.now()}`);
+            // Optional: console.log("💓 Heartbeat sent"); 
+        } catch (e) {
+            // Silently fail to keep logs clean
+        }
+    }, 5000); // 5 seconds is plenty to keep Render awake
+}
+
 client.on('ready', async () => {
     console.log(`🚀 ${client.user.tag} is Live and breathing`);
     
-    // 1. REGISTER COMMANDS IMMEDIATELY
-    // We do this first so Discord knows the bot is responsive
+    // Start the heartbeat as soon as the bot is ready
+    startHeartbeat();
+
+    // 1. REGISTER COMMANDS
     const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try { 
@@ -27,8 +48,7 @@ client.on('ready', async () => {
         console.error("❌ Command Registration Error:", e); 
     }
 
-    // 2. DELAYED WATCHER START (Fixes ETIMEDOUT / ENETUNREACH)
-    // We wait 10 seconds to ensure the Render instance has a stable network IP
+    // 2. DELAYED WATCHER START
     const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const WSS_RPC = "wss://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const FEE_WALLET = process.env.FEE_ACCOUNT || "E1B2BHWce4JMibNSieMhcUcvpQ7BfNG4duVkQTm3o7v6";
@@ -48,28 +68,23 @@ client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
     
     try {
-        // --- HANDLE COMMANDS ---
         if (i.isChatInputCommand() && i.commandName === 'start') {
-            await i.deferReply(); // Mandatory for slow DB calls
+            await i.deferReply(); 
             const dashboardData = await mainDashboard(userId);
             return await i.editReply(dashboardData);
         }
         
-        // --- HANDLE BUTTONS ---
         if (i.isButton()) {
-            // We handle the deferring inside handleButtons.js using .update() or .deferUpdate()
             return await handleButtons(i, userId);
         }
         
-        // --- HANDLE MODALS ---
         if (i.type === InteractionType.ModalSubmit) {
             return await handleModals(i, userId);
         }
     } catch (error) {
         console.error("Critical Interaction Error:", error);
-        const errorMsg = { content: "⚠️ System busy. Please try again in a moment.", ephemeral: true };
+        const errorMsg = { content: "⚠️ System busy. Please try again.", ephemeral: true };
         
-        // Safety: check if we already replied so we don't crash the bot
         if (i.deferred || i.replied) {
             return await i.followUp(errorMsg).catch(() => null);
         } else {
@@ -78,7 +93,6 @@ client.on('interactionCreate', async (i) => {
     }
 });
 
-// GLOBAL ERROR HANDLING: Prevents the bot from crashing on network hiccups
 process.on('unhandledRejection', error => console.error('Unhandled promise rejection:', error));
 process.on('uncaughtException', error => console.error('Uncaught exception:', error));
 
