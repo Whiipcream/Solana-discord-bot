@@ -12,16 +12,16 @@ const db = new Pool({
     connectionTimeoutMillis: 5000,
 });
 
-// --- 🌐 BIRDEYE API INSTANCE (The Fix) ---
+// --- 🌐 BIRDEYE API INSTANCE ---
+// Cleaned up headers to ensure Birdeye accepts the key
 const birdeye = axios.create({
     baseURL: 'https://public-api.birdeye.so',
     headers: { 
-        // .trim() ensures no hidden spaces from Render copy-pasting
         'X-API-KEY': (process.env.BIRDEYE_API_KEY || '').trim(), 
         'x-chain': 'solana',
         'accept': 'application/json'
     },
-    timeout: 8000 // Increased timeout for slower API responses
+    timeout: 8000 
 });
 
 // --- 🚀 DATABASE SETUP ---
@@ -29,6 +29,8 @@ async function setupDatabase() {
     try {
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets (user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, secret_key TEXT NOT NULL)`);
         await db.query(`CREATE TABLE IF NOT EXISTS champagne_wallets_traders (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, trader_address TEXT NOT NULL, status TEXT DEFAULT 'active', trade_limit TEXT DEFAULT '0.1')`);
+        
+        // Ensure trade_limit column exists for older database versions
         await db.query(`ALTER TABLE champagne_wallets_traders ADD COLUMN IF NOT EXISTS trade_limit TEXT DEFAULT '0.1'`);
         console.log('✅ [DB] Schema verified.');
     } catch (err) {
@@ -51,16 +53,17 @@ async function getWalletStats(address) {
         
         return {
             solBalance: solToken ? solToken.uiAmount.toFixed(3) : "0.000",
-            totalUsd: data.totalUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-            tokenCount: data.items.length
+            totalUsd: (data.totalUsd || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
+            tokenCount: data.items ? data.items.length : 0
         };
     } catch (e) {
-        console.error(`❌ Birdeye Sync Error [${e.response?.status || 'Timeout'}]:`, e.message);
+        // Detailed logging to identify if the key is the issue
+        console.error(`❌ Birdeye Sync Error [${e.response?.status || 'Timeout'}]:`, e.response?.data || e.message);
         return { solBalance: "0.000", totalUsd: "$0.00", tokenCount: 0 };
     }
 }
 
-// --- 🔥 DISCOVERY FEED (The 400 & 429 Fix) ---
+// --- 🔥 DISCOVERY FEED ---
 async function getTopTradersFeed() {
     try {
         const res = await birdeye.get('/trader/gainers-losers', {
@@ -76,7 +79,6 @@ async function getTopTradersFeed() {
         }
         return [];
     } catch (e) {
-        // If we hit a 429, we log it clearly so you know to slow down clicks
         if (e.response?.status === 429) {
             console.warn("⚠️ Rate Limit Hit: Birdeye Free Tier allows 1 req/sec.");
         } else {
@@ -107,6 +109,7 @@ const getOrCreateWallet = async (userId) => {
                 [userId, wallet.publicKey, wallet.secretKey]);
         }
         
+        // Fetch real-time stats from Birdeye
         const stats = await getWalletStats(wallet.publicKey);
         return { ...wallet, ...stats };
 
