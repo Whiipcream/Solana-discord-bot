@@ -1,5 +1,5 @@
 const express = require('express'); 
-const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, InteractionType, REST, Routes, Events } = require('discord.js');
 const { startWatching } = require('./watcher'); 
 const axios = require('axios'); 
 require('dotenv').config();
@@ -14,84 +14,99 @@ const app = express();
 app.get('/', (req, res) => res.send('Champagne Terminal Online! 🥂'));
 app.get('/ping', (req, res) => res.status(200).send('pong')); 
 
-app.listen(process.env.PORT || 3000, '0.0.0.0');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => console.log(`📡 Web Server listening on port ${PORT}`));
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+const client = new Client({ 
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] 
+});
 
 // --- 💓 HEARTBEAT TO PREVENT RENDER SLEEP ---
 function startHeartbeat() {
     const RENDER_URL = "https://solana-discord-bot-chai.onrender.com"; 
     setInterval(async () => {
         try {
+            // Self-ping to keep the container from idling
             await axios.get(`${RENDER_URL}/ping?t=${Date.now()}`);
-        } catch (e) { }
-    }, 2000); 
+        } catch (e) { /* Silent fail is fine here */ }
+    }, 30000); // Increased to 30s (2s is too aggressive for Render's free tier)
 }
 
-client.on('ready', async () => {
+// --- 🚀 READY EVENT ---
+client.once(Events.ClientReady, async () => {
     console.log(`🚀 ${client.user.tag} is Live`);
     startHeartbeat();
 
     const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    
     try { 
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands }); 
-    } catch (e) { console.error("Command Error:", e); }
+        console.log("✅ Slash commands registered.");
+    } catch (e) { 
+        console.error("Command Error:", e); 
+    }
 
-    const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
-    const WSS_RPC = "wss://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
+    // RPC Configuration
+    const HELIUS_RPC = process.env.RPC_URL || "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
+    const WSS_RPC = HELIUS_RPC.replace('https', 'wss');
     const FEE_WALLET = process.env.FEE_ACCOUNT || "E1B2BHWce4JMibNSieMhcUcvpQ7BfNG4duVkQTm3o7v6";
     
+    // Delayed start for the blockchain watcher to ensure DB is ready
     setTimeout(() => {
         try {
+            console.log("🔍 Champagne Watcher: Monitoring Blockchain via Helius...");
             startWatching(HELIUS_RPC, WSS_RPC, FEE_WALLET);
-        } catch (err) { console.error("Watcher Error:", err); }
-    }, 10000); 
+        } catch (err) { 
+            console.error("Watcher Error:", err); 
+        }
+    }, 5000); 
 });
 
 // --- 🛠️ INTERACTION HANDLER ---
-client.on('interactionCreate', async (i) => {
+client.on(Events.InteractionCreate, async (i) => {
     const userId = i.user.id;
     
     try {
         // --- 1. SLASH COMMANDS ---
         if (i.isChatInputCommand() && i.commandName === 'start') {
-            if (i.deferred || i.replied) return;
             await i.deferReply(); 
             const dashboardData = await mainDashboard(userId);
-            try {
-                return await i.editReply(dashboardData);
-            } catch (err) {
-                return await i.followUp(dashboardData);
-            }
+            return await i.editReply(dashboardData);
         }
         
-        // --- 2. BUTTONS (STABILIZED HAND-OFF) ---
+        // --- 2. BUTTON HANDLER ---
         if (i.isButton()) {
-            // Check if it's a Modal trigger first. Modals CANNOT be deferred.
+            // Define buttons that trigger Modals. 
+            // ⚠️ DO NOT DEFER THESE. Discord crashes if you defer before showing a Modal.
             const modalButtons = ['add_whale', 'trigger_withdraw_modal'];
             const isModalTrigger = modalButtons.includes(i.customId) || i.customId.startsWith('set_limit_');
 
             if (!isModalTrigger) {
-                // FOR ALL OTHER BUTTONS: Acknowledge INSTANTLY.
-                // This prevents the "Interaction Failed" error on cold starts/checking features.
+                // ALL OTHER BUTTONS (Menus, Explore, Back, etc.)
+                // We defer immediately to prevent "Interaction Failed" while fetching Birdeye data.
                 await i.deferUpdate().catch(() => null);
             }
 
-            // Now handleButtons can take its time fetching "True Balances" or database info.
+            // Hand-off to buttonHandler.js
             return await handleButtons(i, userId);
         }
         
-        // --- 3. MODALS ---
+        // --- 3. MODAL SUBMISSIONS ---
         if (i.type === InteractionType.ModalSubmit) {
+            // Modals usually take time to process (database/blockchain), so we defer.
+            await i.deferReply({ ephemeral: true }).catch(() => null);
             return await handleModals(i, userId);
         }
+
     } catch (error) {
+        // Ignore "Unknown Interaction" errors caused by network lag or duplicate clicks
         if (error.code === 10062 || error.code === 40060) return;
         console.error("Interaction Error:", error);
     }
 });
 
+// Global Error Handling to keep the bot from crashing on Render
 process.on('unhandledRejection', error => {
     if (error.code === 10062 || error.code === 40060) return; 
     console.error('Unhandled Rejection:', error);
