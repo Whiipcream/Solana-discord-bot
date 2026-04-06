@@ -6,7 +6,8 @@ async function handleButtons(i, userId) {
     try {
         const cid = i.customId;
 
-        // --- 1. MODAL TRIGGERS (Must happen before any update/defer) ---
+        // --- 1. MODAL TRIGGERS ---
+        // (index.js does NOT defer these, so showModal works perfectly)
         if (cid === 'add_whale' || cid === 'trigger_withdraw_modal' || cid.startsWith('set_limit_')) {
             const modal = new ModalBuilder();
             
@@ -31,9 +32,11 @@ async function handleButtons(i, userId) {
         }
 
         // --- 2. NAVIGATION & MENUS ---
+        // (index.js HAS already deferred these, so we use editReply)
+        
         if (cid === 'back_main') {
             const dashboardData = await mainDashboard(userId);
-            return await i.update(dashboardData);
+            return await i.editReply(dashboardData);
         }
 
         if (cid === 'menu_positions') {
@@ -51,7 +54,7 @@ async function handleButtons(i, userId) {
                     new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
                 )
             ];
-            return await i.update({ embeds: [embed], components: rows });
+            return await i.editReply({ embeds: [embed], components: rows });
         }
 
         if (cid === 'menu_withdraw') {
@@ -64,7 +67,7 @@ async function handleButtons(i, userId) {
                 new ButtonBuilder().setCustomId('trigger_withdraw_modal').setLabel('Withdraw to Wallet').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
             );
-            return await i.update({ embeds: [embed], components: [row] });
+            return await i.editReply({ embeds: [embed], components: [row] });
         }
 
         if (cid === 'menu_copytrade') {
@@ -83,16 +86,23 @@ async function handleButtons(i, userId) {
                 new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add Target').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
             ));
-            return await i.update({ embeds: [embed], components: rows });
+            return await i.editReply({ embeds: [embed], components: rows });
         }
 
-        // --- 3. ACTIONS (Pause/Remove) ---
+        // --- 3. ACTIONS (Pause/Remove/Manage) ---
+        if (cid.startsWith('manage_trader_')) {
+            const id = cid.split('_')[2];
+            const embed = new EmbedBuilder().setTitle('⚙️ Manage Trader').setDescription(`Settings for Target ID: ${id}`).setColor('#f1c40f');
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`pause_${id}`).setLabel('⏸️ Pause/Resume').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`remove_${id}`).setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('menu_copytrade').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+            );
+            return await i.editReply({ embeds: [embed], components: [row] });
+        }
+
         if (cid.startsWith('pause_') || cid.startsWith('remove_')) {
             const id = cid.split('_')[1];
-            
-            // Acknowledge immediately so the user doesn't wait for DB
-            if (!i.deferred && !i.replied) await i.deferUpdate();
-
             if (cid.startsWith('pause_')) await toggleTraderStatus(id);
             if (cid.startsWith('remove_')) await deleteTrader(id);
             
@@ -100,14 +110,19 @@ async function handleButtons(i, userId) {
             const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
                 .setDescription('✅ List Updated.');
             
-            return await i.editReply({ embeds: [embed], content: null }); 
+            return await i.editReply({ embeds: [embed] }); 
         }
 
     } catch (error) {
         console.error("Button Execution Error:", error);
-        if (!i.replied && !i.deferred) {
-            await i.reply({ content: "⚠️ System delay. Please try again.", ephemeral: true }).catch(() => null);
-        }
+        // Fallback for errors
+        try {
+            if (i.deferred || i.replied) {
+                await i.editReply({ content: "⚠️ System delay. Please try again." });
+            } else {
+                await i.reply({ content: "⚠️ System delay. Please try again.", ephemeral: true });
+            }
+        } catch (e) {}
     }
 }
 
