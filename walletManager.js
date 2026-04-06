@@ -2,17 +2,17 @@ const { Client } = require('pg');
 const { Keypair } = require('@solana/web3.js');
 const bs58 = require('bs58');
 
-// Connects using that URL you just added to Render
+// Connects using your Render Database URL
 const db = new Client({ 
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for Render Postgres connections
+    ssl: { rejectUnauthorized: false } 
 });
 
 db.connect()
     .then(() => console.log('✅ Connected to Champagne Postgres Database'))
     .catch(err => console.error('❌ Database connection error', err));
 
-// Creates the "Safe" table if it doesn't exist
+// 1. Create the Main Wallets Table
 db.query(`
     CREATE TABLE IF NOT EXISTS champagne_wallets (
         user_id TEXT PRIMARY KEY,
@@ -21,9 +21,18 @@ db.query(`
     )
 `);
 
+// 2. Create the Tracked Traders Table (This fixed the button issue)
+db.query(`
+    CREATE TABLE IF NOT EXISTS champagne_wallets_traders (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        trader_address TEXT NOT NULL,
+        status TEXT DEFAULT 'active'
+    )
+`);
+
 const getOrCreateWallet = async (userId) => {
     try {
-        // 1. Check the database for this specific user
         const res = await db.query('SELECT * FROM champagne_wallets WHERE user_id = $1', [userId]);
         
         if (res.rows.length > 0) {
@@ -33,14 +42,12 @@ const getOrCreateWallet = async (userId) => {
             };
         }
 
-        // 2. If user is brand new, generate a permanent wallet
         const kp = Keypair.generate();
         const newWallet = {
             publicKey: kp.publicKey.toBase58(),
             secretKey: bs58.encode(kp.secretKey)
         };
 
-        // 3. Lock it into the database forever
         await db.query(
             'INSERT INTO champagne_wallets (user_id, public_key, secret_key) VALUES ($1, $2, $3)',
             [userId, newWallet.publicKey, newWallet.secretKey]
@@ -55,4 +62,34 @@ const getOrCreateWallet = async (userId) => {
     }
 };
 
-module.exports = { getOrCreateWallet };
+// --- NEW FIXES FOR COPY TRADE ---
+
+const addTrackedTrader = async (userId, traderAddress) => {
+    try {
+        await db.query(
+            'INSERT INTO champagne_wallets_traders (user_id, trader_address, status) VALUES ($1, $2, $3)',
+            [userId, traderAddress, 'active']
+        );
+        console.log(`✅ Trader ${traderAddress} saved for user ${userId}`);
+    } catch (error) {
+        console.error('❌ Error saving trader:', error);
+        throw error;
+    }
+};
+
+const getTrackedTraders = async (userId) => {
+    try {
+        const res = await db.query('SELECT * FROM champagne_wallets_traders WHERE user_id = $1', [userId]);
+        return res.rows;
+    } catch (error) {
+        console.error('❌ Error fetching traders:', error);
+        return [];
+    }
+};
+
+// Export ALL functions so index.js can use them
+module.exports = { 
+    getOrCreateWallet, 
+    addTrackedTrader, 
+    getTrackedTraders 
+};
