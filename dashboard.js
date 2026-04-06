@@ -2,44 +2,51 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { getOrCreateWallet } = require('./walletManager');
 
-// --- 🛠️ THE "BULLETPROOF" CONNECTION ---
-// We define this OUTSIDE the function so it stays "warm"
-const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
-const connection = new Connection(HELIUS_RPC, {
-    commitment: 'confirmed',
-    fetchMiddleware: (url, options) => {
-        options.timeout = 15000; // Give it 15 seconds to respond
-        return fetch(url, options);
-    }
-});
+// --- THE FIX: DUAL-RPC STRATEGY ---
+const RPC_ENDPOINTS = [
+    "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f",
+    "https://api.mainnet-beta.solana.com" // Backup Public RPC
+];
 
 async function getBalance(pubkey) {
-    for (let i = 0; i < 3; i++) {
+    for (const url of RPC_ENDPOINTS) {
         try {
-            console.log(`[Attempt ${i+1}] Checking balance for: ${pubkey}`);
-            const balance = await connection.getBalance(new PublicKey(pubkey));
-            return (balance / 1000000000).toFixed(3); 
+            console.log(`[SYSTEM] Attempting balance check via: ${url.split('?')[0]}`);
+            
+            const connection = new Connection(url, {
+                commitment: 'confirmed',
+                confirmTransactionInitialTimeout: 15000 
+            });
+
+            const pubKeyObject = new PublicKey(pubkey);
+            const balance = await connection.getBalance(pubKeyObject);
+            
+            const solValue = (balance / 1000000000).toFixed(3);
+            console.log(`✅ [SUCCESS] Found ${solValue} SOL`);
+            return solValue;
+
         } catch (e) {
-            console.error(`❌ Balance Fetch Failed: ${e.message}`);
-            // Wait 2 seconds before trying again
-            await new Promise(res => setTimeout(res, 2000));
+            console.error(`⚠️ [RETRY] RPC failed: ${e.message}`);
+            // If this was the last endpoint, we've failed. Otherwise, loop to the next one.
         }
     }
     return "0.00 (Syncing...)"; 
 }
 
 const mainDashboard = async (userId) => {
+    // 1. Get user's wallet info from DB
     const wallet = await getOrCreateWallet(userId);
     
-    // This is the line that actually pulls the money info
+    // 2. Fetch the real balance from the blockchain
     const actualBalance = await getBalance(wallet.publicKey);
 
+    // 3. Build the Terminal UI
     return {
         embeds: [new EmbedBuilder()
             .setTitle('🍾 Champagne Services | Terminal')
             .setDescription(`**Wallet:** \`${wallet.publicKey}\`\n**Balance:** \`${actualBalance} SOL\``)
             .setColor('#FFD700')
-            .setFooter({ text: 'If balance is 0.00, click a button to refresh.' })],
+            .setFooter({ text: 'Refresh by clicking any button or running /start' })],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('menu_positions').setLabel('📈 Positions').setStyle(ButtonStyle.Primary),
