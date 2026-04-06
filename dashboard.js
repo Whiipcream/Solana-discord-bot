@@ -1,5 +1,5 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { getOrCreateWallet } = require('./walletManager');
+const { getOrCreateWallet } = require('./walletManager'); // FIXED: No ../
 
 const mainDashboard = async (userId) => {
     const wallet = await getOrCreateWallet(userId);
