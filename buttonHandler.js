@@ -6,7 +6,7 @@ async function handleButtons(i, userId) {
     try {
         const cid = i.customId;
 
-        // --- 1. MODAL TRIGGERS ---
+        // --- 1. MODAL TRIGGERS (CRITICAL: Modals cannot be Deferred) ---
         if (cid === 'add_whale' || cid === 'trigger_withdraw_modal' || cid.startsWith('set_limit_')) {
             const modal = new ModalBuilder();
             
@@ -27,31 +27,48 @@ async function handleButtons(i, userId) {
                 modal.addComponents(new ActionRowBuilder().addComponents(input));
             }
             
+            // We use .showModal() directly and RETURN so we don't hit the .deferUpdate() in index.js
             return await i.showModal(modal);
         }
 
-        // --- 2. NAVIGATION & MENUS ---
+        // --- 2. DEFER ALL OTHER INTERACTIONS ---
+        // This stops the "InteractionNotReplied" error for menus and actions
+        if (!i.deferred && !i.replied) await i.deferUpdate();
+
+        // --- 3. NAVIGATION & MENUS ---
         
         if (cid === 'back_main') {
             const dashboardData = await mainDashboard(userId);
             return await i.editReply(dashboardData);
         }
 
-        // 🟢 NEW: DISCOVERY MENU (Live Feed)
+        // 🟢 DISCOVERY MENU (Live Feed)
         if (cid === 'menu_discovery') {
             const traders = await getTopTradersFeed();
+            
+            if (!traders || traders.length === 0) {
+                return await i.editReply({ content: "⚠️ No live traders found. Check Birdeye API Key.", components: [
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))
+                ]});
+            }
+
             const embed = new EmbedBuilder()
                 .setTitle('🔥 Live Top Traders (24h)')
-                .setDescription('High-profit wallets identified via Birdeye. Click to Copy.')
+                .setDescription('High-profit wallets identified via Birdeye.')
                 .setColor('#00ffcc');
 
+            // Limit to 4 to stay within Discord component limits
             const rows = traders.slice(0, 4).map((t, idx) => {
                 const addr = t.address;
+                const pnl = t.pnl ? t.pnl.toFixed(2) : "0.00";
+                const roi = t.pnl_percent ? t.pnl_percent.toFixed(1) : "0";
+
                 embed.addFields({ 
-                    name: `#${idx + 1} | ${addr.slice(0,6)}...`, 
-                    value: `PnL: +$${t.pnl.toFixed(2)} | ROI: ${t.pnl_percent.toFixed(1)}%`,
+                    name: `#${idx + 1} | ${addr.slice(0,6)}...${addr.slice(-4)}`, 
+                    value: `PnL: +$${pnl} | ROI: ${roi}%`,
                     inline: true 
                 });
+
                 return new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`quick_copy_${addr}`).setLabel(`Copy #${idx + 1}`).setStyle(ButtonStyle.Success),
                     new ButtonBuilder().setLabel('Solscan').setURL(`https://solscan.io/account/${addr}`).setStyle(ButtonStyle.Link)
@@ -65,10 +82,10 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: rows });
         }
 
-        // 🟢 NEW: QUICK COPY LOGIC
+        // 🟢 QUICK COPY LOGIC
         if (cid.startsWith('quick_copy_')) {
             const targetAddress = cid.split('_')[2];
-            await addTrackedTrader(userId, targetAddress, "0.1"); // Safe default limit
+            await addTrackedTrader(userId, targetAddress, "0.1");
             return await i.editReply({ 
                 content: `✅ Successfully following \`${targetAddress}\`!`, 
                 embeds: [], 
@@ -115,7 +132,7 @@ async function handleButtons(i, userId) {
             const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
                 .setDescription(traders.length > 0 ? 'Select a wallet to manage.' : 'No targets yet.');
 
-            const rows = traders.slice(0, 4).map(t => new ActionRowBuilder().addComponents(
+            const rows = traders.slice(0, 3).map(t => new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId(`manage_trader_${t.id}`)
                     .setLabel(`${t.status === 'active' ? '🟢' : '⏸️'} ${t.trader_address.slice(0,6)}... (${t.trade_limit} SOL)`)
@@ -142,7 +159,7 @@ async function handleButtons(i, userId) {
             return await i.editReply({ embeds: [embed], components: [row] });
         }
 
-        // --- 3. ACTIONS ---
+        // --- 4. TRADER ACTIONS ---
         if (cid.startsWith('manage_trader_')) {
             const id = cid.split('_')[2];
             const embed = new EmbedBuilder().setTitle('⚙️ Manage Trader').setDescription(`Settings for Target ID: ${id}`).setColor('#f1c40f');
@@ -159,22 +176,20 @@ async function handleButtons(i, userId) {
             if (cid.startsWith('pause_')) await toggleTraderStatus(id);
             if (cid.startsWith('remove_')) await deleteTrader(id);
             
+            // After action, show copytrade menu again to confirm change
             const traders = await getTrackedTraders(userId);
             const embed = new EmbedBuilder().setTitle('👥 Copy Trade Settings').setColor('#2ecc71')
                 .setDescription('✅ List Updated.');
             
-            return await i.editReply({ embeds: [embed] }); 
+            return await i.editReply({ embeds: [embed], components: [] }); 
         }
 
     } catch (error) {
         console.error("Button Execution Error:", error);
-        try {
-            if (i.deferred || i.replied) {
-                await i.editReply({ content: "⚠️ System delay. Please try again." });
-            } else {
-                await i.reply({ content: "⚠️ System delay. Please try again.", ephemeral: true });
-            }
-        } catch (e) {}
+        // Error handling that doesn't crash the bot
+        if (i.deferred || i.replied) {
+            await i.editReply({ content: "⚠️ System delay or API Error. Please try again in 5 seconds.", embeds: [], components: [] });
+        }
     }
 }
 
