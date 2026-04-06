@@ -12,13 +12,16 @@ const db = new Pool({
     connectionTimeoutMillis: 5000,
 });
 
-// --- 🌐 BIRDEYE API INSTANCE ---
+// --- 🌐 BIRDEYE API INSTANCE (The Fix) ---
 const birdeye = axios.create({
     baseURL: 'https://public-api.birdeye.so',
     headers: { 
-        'X-API-KEY': process.env.BIRDEYE_API_KEY, 
-        'x-chain': 'solana' 
-    }
+        // .trim() ensures no hidden spaces from Render copy-pasting
+        'X-API-KEY': (process.env.BIRDEYE_API_KEY || '').trim(), 
+        'x-chain': 'solana',
+        'accept': 'application/json'
+    },
+    timeout: 8000 // Increased timeout for slower API responses
 });
 
 // --- 🚀 DATABASE SETUP ---
@@ -34,13 +37,16 @@ async function setupDatabase() {
 }
 setupDatabase();
 
-// --- 📊 BIRDEYE PORTFOLIO LOGIC (Replaces old getBalance) ---
+// --- 📊 BIRDEYE PORTFOLIO LOGIC ---
 async function getWalletStats(address) {
     try {
-        // From your screenshot: Wallet Portfolio / Token List
-        const res = await birdeye.get(`/v1/wallet/token_list?wallet=${address}`);
-        const data = res.data.data;
+        const res = await birdeye.get('/v1/wallet/token_list', {
+            params: { wallet: address }
+        });
         
+        if (!res.data || !res.data.data) throw new Error("No data returned");
+        
+        const data = res.data.data;
         const solToken = data.items.find(i => i.symbol === 'SOL');
         
         return {
@@ -49,18 +55,33 @@ async function getWalletStats(address) {
             tokenCount: data.items.length
         };
     } catch (e) {
-        console.error("Birdeye Sync Error:", e.message);
+        console.error(`❌ Birdeye Sync Error [${e.response?.status || 'Timeout'}]:`, e.message);
         return { solBalance: "0.000", totalUsd: "$0.00", tokenCount: 0 };
     }
 }
 
-// --- 🔥 DISCOVERY FEED (From your "Gainers/Losers" screenshot) ---
+// --- 🔥 DISCOVERY FEED (The 400 & 429 Fix) ---
 async function getTopTradersFeed() {
     try {
-        const res = await birdeye.get('/trader/gainers-losers?type=today&sort_by=pnl&limit=5');
-        return res.data.data.items; 
+        const res = await birdeye.get('/trader/gainers-losers', {
+            params: {
+                type: 'today',
+                sort_by: 'pnl',
+                limit: 5
+            }
+        });
+        
+        if (res.data && res.data.success && res.data.data) {
+            return res.data.data.items || [];
+        }
+        return [];
     } catch (e) {
-        console.error("Top Traders Error:", e.message);
+        // If we hit a 429, we log it clearly so you know to slow down clicks
+        if (e.response?.status === 429) {
+            console.warn("⚠️ Rate Limit Hit: Birdeye Free Tier allows 1 req/sec.");
+        } else {
+            console.error(`❌ Top Traders Error [${e.response?.status}]:`, e.message);
+        }
         return [];
     }
 }
@@ -86,7 +107,6 @@ const getOrCreateWallet = async (userId) => {
                 [userId, wallet.publicKey, wallet.secretKey]);
         }
         
-        // ATTACH BIRDEYE STATS
         const stats = await getWalletStats(wallet.publicKey);
         return { ...wallet, ...stats };
 
