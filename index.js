@@ -7,7 +7,7 @@ const {
 const { getOrCreateWallet } = require('./walletManager');
 require('dotenv').config();
 
-// --- RENDER HEARTBEAT (Keep Bot Alive) ---
+// --- RENDER HEARTBEAT ---
 const app = express();
 app.get('/', (req, res) => res.send('Champagne Terminal is Online! 🥂'));
 const port = process.env.PORT || 3000;
@@ -22,7 +22,6 @@ const client = new Client({
 });
 
 // --- UI GENERATORS ---
-
 const mainDashboard = (userId) => {
     const wallet = getOrCreateWallet(userId);
     return {
@@ -45,26 +44,12 @@ const mainDashboard = (userId) => {
 };
 
 // --- CLIENT LOGIC ---
-
 client.on('ready', async () => {
     console.log(`🚀 Logged in as ${client.user.tag}`);
-
-    // Register Slash Commands
-    const commands = [
-        {
-            name: 'start',
-            description: 'Launch the Champagne Terminal 🥂'
-        }
-    ];
-
+    const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-
     try {
-        console.log('Started refreshing application (/) commands.');
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands },
-        );
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
         console.log('Successfully reloaded application (/) commands.');
     } catch (error) {
         console.error('Error refreshing commands:', error);
@@ -74,22 +59,18 @@ client.on('ready', async () => {
 client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
 
-    // Handle Slash Command
+    // 1. Handle Slash Commands
     if (i.isChatInputCommand()) {
-        if (i.commandName === 'start') {
-            return await i.reply(mainDashboard(userId));
-        }
+        if (i.commandName === 'start') return await i.reply(mainDashboard(userId));
     }
 
-    // Handle Buttons
+    // 2. Handle Buttons
     if (i.isButton()) {
-        // --- POSITIONS MENU ---
         if (i.customId === 'menu_positions') {
             const embed = new EmbedBuilder()
                 .setTitle('📈 Your Positions')
                 .setDescription('**Token:** `$SOL` | **Value:** 0.00\n*Select a coin below to manage individually.*')
                 .setColor('#5865F2');
-
             const rows = [
                 new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('sell_25').setLabel('Sell 25%').setStyle(ButtonStyle.Secondary),
@@ -103,13 +84,11 @@ client.on('interactionCreate', async (i) => {
             await i.update({ embeds: [embed], components: rows });
         }
 
-        // --- COPY TRADE MENU ---
         if (i.customId === 'menu_copytrade') {
             const embed = new EmbedBuilder()
                 .setTitle('👥 Copy Trade Settings')
                 .setDescription('**Targets:** `None`\nMonitor wallets and mimic their buys/sells instantly.')
                 .setColor('#2ecc71');
-
             const rows = [
                 new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('add_whale').setLabel('➕ Add Wallet').setStyle(ButtonStyle.Success),
@@ -123,14 +102,12 @@ client.on('interactionCreate', async (i) => {
             await i.update({ embeds: [embed], components: rows });
         }
 
-        // --- WITHDRAW MENU ---
         if (i.customId === 'menu_withdraw') {
             const wallet = getOrCreateWallet(userId);
             const embed = new EmbedBuilder()
                 .setTitle('💸 Withdraw Funds')
                 .setDescription(`**Available Balance:** \`0.00 SOL\`\n**From Bot Wallet:** \`${wallet.publicKey}\``)
                 .setColor('#e74c3c');
-
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('trigger_withdraw_modal').setLabel('Withdraw to Real Wallet').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('back_main').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
@@ -138,16 +115,11 @@ client.on('interactionCreate', async (i) => {
             await i.update({ embeds: [embed], components: [row] });
         }
 
-        // --- SETTINGS MENU ---
         if (i.customId === 'menu_settings') {
             const embed = new EmbedBuilder()
                 .setTitle('⚙️ Dashboard Settings')
-                .addFields(
-                    { name: 'Slippage', value: '`1.0%`', inline: true },
-                    { name: 'Priority Fee', value: '`Turbo`', inline: true }
-                )
+                .addFields({ name: 'Slippage', value: '`1.0%`', inline: true }, { name: 'Priority Fee', value: '`Turbo`', inline: true })
                 .setColor('#95a5a6');
-
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('set_slippage').setLabel('Slippage').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId('export_key').setLabel('🔑 Export Key').setStyle(ButtonStyle.Danger),
@@ -156,33 +128,43 @@ client.on('interactionCreate', async (i) => {
             await i.update({ embeds: [embed], components: [row] });
         }
 
-        // --- BACK BUTTON ---
-        if (i.customId === 'back_main') {
-            await i.update(mainDashboard(userId));
-        }
+        if (i.customId === 'back_main') await i.update(mainDashboard(userId));
 
-        // --- MODAL POPUPS ---
         if (i.customId === 'add_whale' || i.customId === 'trigger_withdraw_modal') {
             const isWhale = i.customId === 'add_whale';
             const modal = new ModalBuilder()
                 .setCustomId(isWhale ? 'whale_modal' : 'withdraw_modal')
                 .setTitle(isWhale ? 'Add Target Wallet' : 'Withdraw SOL');
-
             const input = new TextInputBuilder()
                 .setCustomId('address')
                 .setLabel(isWhale ? "Target Wallet Address" : "Destination Wallet Address")
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true);
-
             const amount = new TextInputBuilder()
                 .setCustomId('amount')
                 .setLabel(isWhale ? "Max SOL per trade" : "Amount to withdraw")
                 .setStyle(TextInputStyle.Short)
                 .setPlaceholder("e.g. 0.1")
                 .setRequired(true);
-
             modal.addComponents(new ActionRowBuilder().addComponents(input), new ActionRowBuilder().addComponents(amount));
             await i.showModal(modal);
+        }
+    }
+
+    // 3. Handle Modal Submissions (THIS WAS THE MISSING PART)
+    if (i.type === InteractionType.ModalSubmit) {
+        if (i.customId === 'whale_modal') {
+            const address = i.fields.getTextInputValue('address');
+            const amount = i.fields.getTextInputValue('amount');
+            
+            // This is where you'd save to a database. For now, we confirm it worked:
+            await i.reply({ content: `✅ **Success!** Now tracking: \`${address}\` with a \`${amount} SOL\` limit.`, ephemeral: true });
+        }
+        
+        if (i.customId === 'withdraw_modal') {
+            const address = i.fields.getTextInputValue('address');
+            const amount = i.fields.getTextInputValue('amount');
+            await i.reply({ content: `💸 **Withdrawal Initiated:** Sending \`${amount} SOL\` to \`${address}\`.`, ephemeral: true });
         }
     }
 });
