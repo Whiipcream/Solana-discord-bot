@@ -23,12 +23,12 @@ function startHeartbeat() {
     const RENDER_URL = "https://solana-discord-bot-chai.onrender.com"; 
     setInterval(async () => {
         try {
-            // High-frequency ping to keep CPU from being throttled
+            // High-frequency ping to prevent Render's CPU sleep
             await axios.get(`${RENDER_URL}/ping?t=${Date.now()}`);
         } catch (e) {
-            // Silently ignore to keep logs clean
+            // Silently fail
         }
-    }, 2000); // 2 seconds for maximum wakefulness
+    }, 2000); 
 }
 
 client.on('ready', async () => {
@@ -53,7 +53,7 @@ client.on('ready', async () => {
     setTimeout(() => {
         try {
             startWatching(HELIUS_RPC, WSS_RPC, FEE_WALLET);
-            console.log("👀 Watcher Active. Fee Account: " + FEE_WALLET);
+            console.log("👀 Watcher Active.");
         } catch (err) {
             console.error("❌ Watcher failed to start:", err);
         }
@@ -65,12 +65,22 @@ client.on('interactionCreate', async (i) => {
     
     try {
         if (i.isChatInputCommand() && i.commandName === 'start') {
-            // --- THE FIX: CRITICAL SAFETY CHECK ---
+            // 1. Check if we already acknowledged this
             if (i.deferred || i.replied) return;
 
+            // 2. Tell Discord we are working (gives us a 15-min window)
             await i.deferReply(); 
+            
+            // 3. Fetch the dashboard (Wallet + Balance)
             const dashboardData = await mainDashboard(userId);
-            return await i.editReply(dashboardData);
+            
+            // 4. Safe Edit: Prevents "Unknown Interaction" if Discord times out the token
+            try {
+                return await i.editReply(dashboardData);
+            } catch (err) {
+                console.log("⚠️ EditReply failed, attempting FollowUp...");
+                return await i.followUp(dashboardData);
+            }
         }
         
         if (i.isButton()) {
@@ -82,14 +92,18 @@ client.on('interactionCreate', async (i) => {
         }
     } catch (error) {
         console.error("Critical Interaction Error:", error);
-        // Only reply if we haven't already sent a response
         if (!i.replied && !i.deferred) {
             await i.reply({ content: "⚠️ System busy. Please try again.", ephemeral: true }).catch(() => null);
         }
     }
 });
 
-process.on('unhandledRejection', error => console.error('Unhandled promise rejection:', error));
+// --- GLOBAL ERROR CATCHERS ---
+process.on('unhandledRejection', error => {
+    if (error.code === 10062) return; // Ignore "Unknown Interaction" logs to keep it clean
+    console.error('Unhandled promise rejection:', error);
+});
+
 process.on('uncaughtException', error => console.error('Uncaught exception:', error));
 
 client.login(process.env.DISCORD_TOKEN);
