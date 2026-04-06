@@ -1,7 +1,7 @@
 const express = require('express');
 const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
 const { startWatching } = require('./watcher'); 
-const axios = require('axios'); // Added axios for heartbeat
+const axios = require('axios'); 
 require('dotenv').config();
 
 const { mainDashboard } = require('./dashboard'); 
@@ -12,33 +12,30 @@ const app = express();
 
 // --- 🟢 KEEP-ALIVE ROUTES ---
 app.get('/', (req, res) => res.send('Champagne Terminal Online! 🥂'));
-app.get('/ping', (req, res) => res.status(200).send('pong')); // Lightweight ping endpoint
+app.get('/ping', (req, res) => res.status(200).send('pong')); 
 
 app.listen(process.env.PORT || 3000, '0.0.0.0');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 
 // --- 💓 THE HEARTBEAT FUNCTION ---
-// This hits your own server every 5 seconds to keep the CPU "hot"
 function startHeartbeat() {
     const RENDER_URL = "https://solana-discord-bot-chai.onrender.com"; 
     setInterval(async () => {
         try {
+            // High-frequency ping to keep CPU from being throttled
             await axios.get(`${RENDER_URL}/ping?t=${Date.now()}`);
-            // Optional: console.log("💓 Heartbeat sent"); 
         } catch (e) {
-            // Silently fail to keep logs clean
+            // Silently ignore to keep logs clean
         }
-    }, 5000); // 5 seconds is plenty to keep Render awake
+    }, 2000); // 2 seconds for maximum wakefulness
 }
 
 client.on('ready', async () => {
     console.log(`🚀 ${client.user.tag} is Live and breathing`);
-    
-    // Start the heartbeat as soon as the bot is ready
     startHeartbeat();
 
-    // 1. REGISTER COMMANDS
+    // REGISTER SLASH COMMANDS
     const commands = [{ name: 'start', description: 'Launch the Champagne Terminal 🥂' }];
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try { 
@@ -48,18 +45,17 @@ client.on('ready', async () => {
         console.error("❌ Command Registration Error:", e); 
     }
 
-    // 2. DELAYED WATCHER START
+    // DELAYED WATCHER START
     const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const WSS_RPC = "wss://mainnet.helius-rpc.com/?api-key=d6000b15-d20e-43b6-9fe1-b70692b7a70f";
     const FEE_WALLET = process.env.FEE_ACCOUNT || "E1B2BHWce4JMibNSieMhcUcvpQ7BfNG4duVkQTm3o7v6";
     
     setTimeout(() => {
-        console.log("🔗 Connecting to Helius RPC...");
         try {
             startWatching(HELIUS_RPC, WSS_RPC, FEE_WALLET);
             console.log("👀 Watcher Active. Fee Account: " + FEE_WALLET);
         } catch (err) {
-            console.error("❌ Watcher failed to start during boot:", err);
+            console.error("❌ Watcher failed to start:", err);
         }
     }, 10000); 
 });
@@ -69,6 +65,9 @@ client.on('interactionCreate', async (i) => {
     
     try {
         if (i.isChatInputCommand() && i.commandName === 'start') {
+            // --- THE FIX: CRITICAL SAFETY CHECK ---
+            if (i.deferred || i.replied) return;
+
             await i.deferReply(); 
             const dashboardData = await mainDashboard(userId);
             return await i.editReply(dashboardData);
@@ -83,12 +82,9 @@ client.on('interactionCreate', async (i) => {
         }
     } catch (error) {
         console.error("Critical Interaction Error:", error);
-        const errorMsg = { content: "⚠️ System busy. Please try again.", ephemeral: true };
-        
-        if (i.deferred || i.replied) {
-            return await i.followUp(errorMsg).catch(() => null);
-        } else {
-            return await i.reply(errorMsg).catch(() => null);
+        // Only reply if we haven't already sent a response
+        if (!i.replied && !i.deferred) {
+            await i.reply({ content: "⚠️ System busy. Please try again.", ephemeral: true }).catch(() => null);
         }
     }
 });
