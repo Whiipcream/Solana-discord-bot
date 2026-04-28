@@ -1,6 +1,6 @@
 const express = require('express'); 
 const { Client, GatewayIntentBits, InteractionType, REST, Routes, Events } = require('discord.js');
-const { startWatching } = require('./watcher'); 
+const { startMonitoring } = require('./src/services/walletMonitor');
 const axios = require('axios'); 
 require('dotenv').config();
 
@@ -28,9 +28,9 @@ client.once(Events.ClientReady, async () => {
     } catch (e) { console.error(e); }
 
     const RPC = process.env.RPC_URL || "";
-    const WSS = RPC.replace('https://', 'wss://');
+    const WSS = process.env.WSS_URL || RPC.replace('https://', 'wss://');
     setTimeout(() => {
-        try { startWatching(RPC, WSS, process.env.FEE_ACCOUNT); } catch (err) { console.error(err); }
+        try { startMonitoring(RPC, WSS); } catch (err) { console.error(err); }
     }, 5000); 
 });
 
